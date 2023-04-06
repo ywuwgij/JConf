@@ -1,1 +1,3 @@
 # JConf
+
+Distributed configuration center.
