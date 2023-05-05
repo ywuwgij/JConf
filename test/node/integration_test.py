@@ -44,7 +44,7 @@ def __start_service_node():
     """
     service_node_config = get_service_node_config("config.json")
     udp_client = UdpClient(service_node_config.slave.ip, service_node_config.slave.port)
-    service_node = ServiceNode(udp_client)
+    service_node = ServiceNode(udp_client, name="Magic")
     service_node.start()
 
 if __name__ == "__main__":

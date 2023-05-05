@@ -42,7 +42,7 @@ class ServiceNode:
         :param udp_client:
         """
         self.__udp_client = udp_client
-        self.__name = kwargs.get("name")
+        self.__name = kwargs.get("name", "未定义")
 
     def __receive(self):
         """
@@ -94,6 +94,7 @@ class ServiceNode:
         :return:
         """
         if not self.__running:
+            logging.info(f"服务节点【{self.__name}】开始运行，目标从节点地址=>{self.__udp_client.address}:{self.__udp_client.port}")
             self.__running = True
             threading.Thread(target=self.__receive).start()
             threading.Thread(target=self.__heartbeat).start()
@@ -138,9 +139,6 @@ class SlaveNode:
     # 组播代理端
     __multicast_client: MulticastClient = None
 
-    # 组播服务端
-    __multicast_server: MulticastServer = None
-
     # UDP服务端
     __udp_server: UdpServer = None
 
@@ -178,6 +176,7 @@ class SlaveNode:
         """
         if not self.__running:
             self.__running = True
+            logging.info(f"从节点开始运行，注册广播地址=>{self.__multicast_client.address}:{self.__multicast_client.port}，监听UDP地址=>{self.__udp_server.address}:{self.__udp_server.port}，主节点地址=>{self.__master_node_address}")
             # 启动组播代理端
             threading.Thread(target=self.__multicast_receive, args=(self.__multicast_client,)).start()
             # 启动组播握手或心跳发送线程
@@ -382,7 +381,7 @@ class MasterNode:
         """
         if not self.__running:
             self.__running = True
-
+            logging.info(f"启动主节点，组播监听地址=>{self.__multicast_server.address}:{self.__multicast_server.port}，UDP监听地址=>{self.__udp_server.address}:{self.__udp_server.port}")
             # 启动组播接收线程
             threading.Thread(target=self.__multicast_receive).start()
 
