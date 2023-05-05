@@ -32,7 +32,7 @@ class UdpConnection(Connection, metaclass=abc.ABCMeta):
 
 class UdpServer(UdpConnection):
     """
-    TCP服务端
+    UDP服务端
     """
 
     # 是否正在运行

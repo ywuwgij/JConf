@@ -3,7 +3,7 @@ import os
 import pickle
 import uuid
 from typing import List, Any
-from setting import SettingVersionType, SettingVersion
+from settings.setting import SettingVersionType, SettingVersion
 
 
 class BaseFileRepository(metaclass=abc.ABCMeta):

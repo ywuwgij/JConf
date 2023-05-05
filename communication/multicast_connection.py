@@ -1,7 +1,6 @@
 import abc
 import logging
 import socket
-import struct
 import uuid
 from typing import Union, Tuple
 

@@ -5,12 +5,13 @@
 import logging
 import threading
 import time
-from typing import List, Tuple, Union
+from typing import List, Tuple, Union, Optional
 from communication.multicast_connection import Connection, MulticastServer, MulticastClient
 from communication.connection_info import ConnectionInfo
 from communication.message import MessagePackage, MessageType
 from communication.udp_connection import UdpServer, UdpClient
-from repository import LocalNodeClientRepository, LocalSettingRepository
+from node_config import save_slave_node_config_master_address
+from settings.repository import LocalNodeClientRepository, LocalSettingRepository
 
 logging.root.setLevel(logging.INFO)
 logging.basicConfig(format='%(asctime)s - %(pathname)s[line:%(lineno)d] - %(levelname)s: %(message)s')
@@ -23,6 +24,9 @@ class ServiceNode:
     3、接收配置变更信息（本地UDP)
     """
 
+    # 服务节点名称
+    __name: str = None
+
     # UDP客户端
     __udp_client: UdpClient
 
@@ -32,12 +36,13 @@ class ServiceNode:
     # 从节点是否连接
     __client_node_connected: bool = False
 
-    def __init__(self, udp_client: UdpClient):
+    def __init__(self, udp_client: UdpClient, **kwargs):
         """
         初始化
         :param udp_client:
         """
         self.__udp_client = udp_client
+        self.__name = kwargs.get("name")
 
     def __receive(self):
         """
@@ -48,10 +53,6 @@ class ServiceNode:
         while self.__running:
             msg = ''
             try:
-                if not self.__client_node_connected:
-                    client_address = f"{self.__udp_client.address}:{self.__udp_client.port}"
-                    logging.info(f"服务节点向从节点{client_address}发送握手请求")
-                    self.__udp_client.send(MessagePackage(MessageType.HANDSHAKE_REQUEST))
                 msg, address = self.__udp_client.receive()
                 if msg:
                     if msg.message_type == MessageType.HANDSHAKE_RESPONSE:
@@ -76,12 +77,15 @@ class ServiceNode:
         while self.__running:
             if self.__client_node_connected:
                 try:
-                    self.__udp_client.send(MessagePackage(MessageType.HEARTBEAT_REQUEST))
+                    self.__udp_client.send(MessagePackage(message_type=MessageType.HEARTBEAT_REQUEST, message_content={"name": self.__name}))
                     logging.info(f"服务节点向从节点{self.__udp_client.address}:{self.__udp_client.port}发送心跳")
                 except Exception as e:
                     logging.error("心跳异常", e)
                 time.sleep(30)
             else:
+                client_address = f"{self.__udp_client.address}:{self.__udp_client.port}"
+                logging.info(f"服务节点向从节点{client_address}发送握手请求")
+                self.__udp_client.send(MessagePackage(message_type=MessageType.HANDSHAKE_REQUEST, message_content={"name": self.__name}))
                 time.sleep(10)
 
     def start(self):
@@ -101,7 +105,7 @@ class ServiceNode:
         """
         if self.__running:
             self.__running = False
-            self.__udp_client.send(MessagePackage(MessageType.CONNECTION_CLOSE))
+            self.__udp_client.send(MessagePackage(message_type=MessageType.CONNECTION_CLOSE, message_content={"name": self.__name}))
             self.__udp_client.close()
 
     def __del__(self):
@@ -141,7 +145,7 @@ class SlaveNode:
     __udp_server: UdpServer = None
 
     # 主节点连接
-    __host_node_address: Union[Tuple[str, int], str] = None
+    __master_node_address: Union[Tuple[str, int], str] = None
 
     # 代理端连接
     __client_node_connections: List[ConnectionInfo] = []
@@ -152,7 +156,7 @@ class SlaveNode:
     # 是否运行
     __running: bool = False
 
-    def __init__(self, multicast_client: MulticastClient, udp_server: UdpServer):
+    def __init__(self, multicast_client: MulticastClient, udp_server: UdpServer, master_node_address: Optional[Tuple[str, int]]=None):
         """
         初始化
         :param multicast_client: 组播代理端
@@ -160,6 +164,7 @@ class SlaveNode:
         """
         self.__multicast_client = multicast_client or MulticastClient()
         self.__udp_server = udp_server
+        self.__master_node_address = master_node_address
 
     def start(self):
         """
@@ -187,15 +192,15 @@ class SlaveNode:
         :return:
         """
         while self.__running:
-            if self.__host_node_address is None:
+            if self.__master_node_address is None:
                 # 组播发送握手请求
                 logging.info("从节点广播发送握手请求")
                 self.__multicast_client.broadcast(MessagePackage(MessageType.HANDSHAKE_REQUEST, None))
                 time.sleep(3)
             else:
                 # UDP发送心跳请求
-                logging.info(f"从节点发送心跳请求至主节点{self.__host_node_address}")
-                self.__multicast_client.send(MessagePackage(MessageType.HEARTBEAT_REQUEST, None), self.__host_node_address)
+                logging.info(f"从节点发送心跳请求至主节点{self.__master_node_address}")
+                self.__multicast_client.send(MessagePackage(MessageType.HEARTBEAT_REQUEST, None), self.__master_node_address)
                 time.sleep(30)
 
     def __multicast_receive(self, multicast: Connection):
@@ -212,16 +217,19 @@ class SlaveNode:
             if msg.sender != multicast.name and (msg.receiver == multicast.name or msg.receiver is None):
                 # 只接受一个主节点的握手成功响应消息
                 if msg.message_type == MessageType.HANDSHAKE_RESPONSE:
-                    if self.__host_node_address is None:
+                    if self.__master_node_address is None:
                         # 握手成功响应消息
-                        self.__host_node_address = address
-                        logging.info(f"从节点成功连接到主节点{self.__host_node_address}")
+                        self.__master_node_address = address
+                        logging.info(f"从节点成功连接到主节点{self.__master_node_address}")
+                        ip_address = self.__master_node_address[0] if isinstance(self.__master_node_address, tuple) else self.__master_node_address
+                        port = self.__master_node_address[1] if isinstance(self.__master_node_address, tuple) else 0
+                        save_slave_node_config_master_address(ip_address, port)
                 elif msg.message_type == MessageType.CONFIGURATION_CHANGE:
                     # 配置变更通知
                     if msg.receiver == multicast.name:
-                        logging.info(f"接收到主节点{self.__host_node_address}发送的配置变更通知：" + str(msg))
+                        logging.info(f"接收到主节点{self.__master_node_address}发送的配置变更通知：" + str(msg))
                     else:
-                        logging.info(f"接收到主节点{self.__host_node_address}广播的配置变更通知：" + str(msg))
+                        logging.info(f"接收到主节点{self.__master_node_address}广播的配置变更通知：" + str(msg))
                     self.__process_configuration_change(msg, address)
 
     def __process_configuration_change(self, msg: MessagePackage, address: Union[Tuple[str, int], str] ):
@@ -352,7 +360,7 @@ class MasterNode:
         """
         初始化
         :param multicast_server: 组播服务端
-        :param udp_server: UDP服务端 (用于接收主机的配置变更通知)
+        :param udp_server: UDP服务端 (用于接收配置相关服务的配置变更通知)
         :param node_client_repository: 节点代理端仓储
         :param local_setting_repository: 本地配置仓储
         """
